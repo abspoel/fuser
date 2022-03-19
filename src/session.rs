@@ -167,8 +167,8 @@ fn aligned_sub_buf(buf: &mut [u8], alignment: usize) -> &mut [u8] {
 
 impl<FS: 'static + Filesystem + Send> Session<FS> {
     /// Run the session loop in a background thread
-    pub fn spawn(self) -> io::Result<BackgroundSession> {
-        BackgroundSession::new(self)
+    pub fn spawn(self, send_finished: Option<std::sync::mpsc::Sender<()>>) -> io::Result<BackgroundSession> {
+        BackgroundSession::new(self, send_finished)
     }
 }
 
@@ -198,6 +198,7 @@ impl BackgroundSession {
     /// the filesystem is unmounted and the given session ends.
     pub fn new<FS: Filesystem + Send + 'static>(
         mut se: Session<FS>,
+        send_finished: Option<std::sync::mpsc::Sender<()>>,
     ) -> io::Result<BackgroundSession> {
         let mountpoint = se.mountpoint().to_path_buf();
         // Take the fuse_session, so that we can unmount it
@@ -205,7 +206,11 @@ impl BackgroundSession {
         let mount = mount.ok_or_else(|| io::Error::from_raw_os_error(libc::ENODEV))?;
         let guard = thread::spawn(move || {
             let mut se = se;
-            se.run()
+            let result = se.run();
+            if let Some(channel) = send_finished {
+                let _ = channel.send(());
+            }
+            result
         });
         Ok(BackgroundSession {
             mountpoint,
